@@ -1,0 +1,76 @@
+# Proves PURPL-Setup.exe on a clean Windows runner: a silent per-user install,
+# shortcuts, purpl-desktop:// and "Open with PURPL" for .xrk/.xrz/.csv with no
+# default association changed, nothing under HKLM, launch, single instance,
+# quit, and a silent uninstall that keeps %APPDATA%\PURPL.
+#
+# The installer comes from a draft release and is deleted with it after the
+# run. Only the logs are uploaded. Hosted runners are Windows Server with Smart
+# App Control off, so this proves the installer, not what SAC does on
+# Windows 11.
+name: Install test
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of the draft release holding PURPL-Setup.exe and latest.yml
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Outside the workspace, so no upload below can pick the installer up.
+      - name: Download the installer from the draft release
+        id: download
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "not a release tag: $env:TAG" }
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern PURPL-Setup.exe --pattern latest.yml --dir "$env:RUNNER_TEMP\purpl"
+
+      - name: Check the installer against latest.yml
+        id: verify
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          $dir = "$env:RUNNER_TEMP\purpl"
+          $yml = Get-Content "$dir\latest.yml" -Raw
+          $version = $env:TAG.Substring(1)
+          if ($yml -notmatch "(?m)^version: $([regex]::Escape($version))\s*$") { throw "latest.yml is not $version" }
+          $want = [regex]::Match($yml, '(?m)^sha512: (\S+)').Groups[1].Value
+          $bytes = [IO.File]::ReadAllBytes("$dir\PURPL-Setup.exe")
+          $got = [Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash($bytes))
+          if ($got -ne $want) { throw "PURPL-Setup.exe sha512 $got does not match latest.yml $want" }
+          "PURPL-Setup.exe $($bytes.Length) bytes, sha512 matches latest.yml"
+          New-Item -ItemType Directory -Force logs | Out-Null
+          Get-ComputerInfo -Property OsName, OsVersion, OsBuildNumber | Format-List | Out-File logs\runner.txt -Encoding utf8
+          "session $((Get-Process -Id $PID).SessionId), user $env:USERNAME" | Add-Content logs\runner.txt
+
+      # Windows PowerShell 5.1 on purpose: it is what users' PCs run.
+      - name: Install with a basic-user token, launch, uninstall
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        shell: powershell
+        run: .\scripts\install-test.ps1 -Installer "$env:RUNNER_TEMP\purpl\PURPL-Setup.exe" -Log logs\install-test-basic-user.log
+
+      - name: Install from the job's own token, launch, uninstall
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        shell: powershell
+        run: .\scripts\install-test.ps1 -Installer "$env:RUNNER_TEMP\purpl\PURPL-Setup.exe" -Log logs\install-test-direct.log -Direct
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-test-logs
+          path: logs/
+          retention-days: 1
+          if-no-files-found: warn
