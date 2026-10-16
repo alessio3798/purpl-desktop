@@ -16,8 +16,11 @@ on:
         description: Tag of the draft release holding PURPL-Setup.exe and latest.yml
         required: true
 
+# A draft release is visible only to a token that can write contents; with
+# contents: read, gh answers "release not found" (run 38909342981). Nothing
+# here writes: it downloads two assets and uploads the logs.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   install:
