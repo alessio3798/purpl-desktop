@@ -50,8 +50,13 @@ $installDir = Join-Path $env:LOCALAPPDATA 'Programs\purpl-desktop'
 $exe = Join-Path $installDir 'PURPL.exe'
 $mainLog = Join-Path $env:APPDATA 'PURPL\logs\main.log'
 function Installed-Version {
+  # The exe's file version is numeric (0.1.0.0); the uninstall entry the
+  # installer writes carries the full version, prerelease included.
   if (-not (Test-Path $exe)) { return $null }
-  return (Get-Item $exe).VersionInfo.ProductVersion
+  $entry = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+    Get-ItemProperty | Where-Object { $_.DisplayName -like 'PURPL*' } | Select-Object -First 1
+  if ($entry) { return [string]$entry.DisplayVersion }
+  return $null
 }
 function Updater-Lines {
   if (-not (Test-Path $mainLog)) { return @() }
