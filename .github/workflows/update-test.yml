@@ -1,0 +1,52 @@
+# Proves auto-update on a clean Windows runner: installs an older PUBLISHED
+# release, launches it, lets its updater download the latest release from
+# this repo, closes the app, and checks the installed version moved.
+# Only the logs are uploaded.
+name: Update test
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Published tag to install first (the old version)
+        required: true
+      to:
+        description: Version the updater must move it to (the current latest)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the old installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+        run: |
+          if ($env:FROM -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "not a release tag: $env:FROM" }
+          if ($env:TO -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "not a version: $env:TO" }
+          gh release download $env:FROM --repo $env:GITHUB_REPOSITORY --pattern PURPL-Setup.exe --dir "$env:RUNNER_TEMP\old"
+
+      # Windows PowerShell 5.1 on purpose: it is what users' PCs run.
+      - name: Install old, update, check
+        shell: powershell
+        env:
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+        run: .\scripts\update-test.ps1 -Installer "$env:RUNNER_TEMP\old\PURPL-Setup.exe" -From $env:FROM -To $env:TO -Log logs\update-test.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: update-test-logs
+          path: logs/
+          retention-days: 7
+          if-no-files-found: warn
